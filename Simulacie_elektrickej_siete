@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <title>Profi Elektro Simulátor</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #1e1e2f;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { margin-top: 0; color: #fff; }
+        #toolbar {
+            margin-bottom: 15px;
+            padding: 15px;
+            background: #2a2a40;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            justify-content: center;
+            max-width: 1100px;
+        }
+        .file-input-wrapper {
+            background: #3f3f5a;
+            padding: 8px 12px;
+            border-radius: 5px;
+            border: 1px solid #555;
+        }
+        button {
+            background-color: #3f3f5a;
+            color: white;
+            border: 1px solid #555;
+            padding: 8px 14px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        button:hover { background-color: #4f4f7a; }
+        .active { background-color: #007bff; border-color: #00bfff; box-shadow: 0 0 10px #007bff; }
+        
+        /* Farebné rozlíšenie tlačidiel */
+        #btn-breaker { border-bottom: 3px solid #2ecc71; }
+        #btn-socket { border-bottom: 3px solid #3498db; }
+        #btn-light { border-bottom: 3px solid #f1c40f; }
+        .btn-sw { border-bottom: 3px solid #e74c3c; }
+        #btn-cable { background-color: #5c3f8a; border-bottom: 3px solid #9b59b6; }
+        #btn-cable.active { background-color: #9b59b6; }
+        #btn-eraser { background-color: #721c24; border: 1px solid #f5c6cb; color: #f5c6cb; }
+        #btn-eraser.active { background-color: #dc3545; color: white; box-shadow: 0 0 10px #dc3545; }
+
+        canvas {
+            background: #2b2b2b;
+            border-radius: 6px;
+            cursor: crosshair;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+        }
+        #status-bar {
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #00bfff;
+            background: #2a2a40;
+            padding: 8px 20px;
+            border-radius: 20px;
+            box-shadow: inset 0 0 5px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Simulátor Elektroinštalácie (STN Normy)</h1>
+
+    <div id="toolbar">
+        <div class="file-input-wrapper">
+            <label for="imageLoader">🗺️ Pôdorys: </label>
+            <input type="file" id="imageLoader" accept="image/*" />
+        </div>
+        <button onclick="setTool('breaker')" id="btn-breaker">FA Istič</button>
+        <button onclick="setTool('socket')" id="btn-socket">Zásuvka</button>
+        <button onclick="setTool('light')" id="btn-light">Svetlo</button>
+        <button onclick="setTool('switch1')" id="btn-switch1" class="btn-sw">Vypínač č.1</button>
+        <button onclick="setTool('switch5')" id="btn-switch5" class="btn-sw">Vypínač č.5</button>
+        <button onclick="setTool('switch6')" id="btn-switch6" class="btn-sw">Vypínač č.6</button>
+        <button onclick="setTool('switch7')" id="btn-switch7" class="btn-sw">Vypínač č.7</button>
+        <button onclick="setTool('cable')" id="btn-cable">🔌 KÁBEL</button>
+        <button onclick="setTool('eraser')" id="btn-eraser">🧹 GUMA</button>
+    </div>
+
+    <div id="status-bar">Vyber si nástroj z menu hore.</div>
+
+    <canvas id="appCanvas" width="1100" height="750"></canvas>
+
+    <script>
+        const canvas = document.getElementById('appCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusBar = document.getElementById('status-bar');
+        
+        let bgImage = null;
+        let elements = []; 
+        let connections = []; // Pole pre káble: { from: id, to: id }
+        let currentTool = null;
+        let cableStartElement = null; // Prvý kliknutý prvok pri spájaní káblom
+
+        const HIT_RADIUS = 16; 
+
+        // Načítanie pôdorysu
+        document.getElementById('imageLoader').addEventListener('change', function(e){
+            const reader = new FileReader();
+            reader.onload = function(event){
+                const img = new Image();
+                img.onload = function(){
+                    bgImage = img;
+                    drawScene();
+                }
+                img.src = event.target.result;
+            }
+            if(e.target.files[0]) reader.readAsDataURL(e.target.files[0]);
+        });
+
+        // Prepínanie nástrojov
+        function setTool(tool) {
+            currentTool = tool;
+            cableStartElement = null; // Resetuj rozťahaný kábel pri zmene nástroja
+            document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-${tool}`).classList.add('active');
+            
+            let toolText = {
+                'breaker': 'Umiestňuješ: Hlavný Istič (Rozvádzač)',
+                'socket': 'Umiestňuješ: Klasickú zásuvku 230V',
+                'light': 'Umiestňuješ: Svetelný vývod / Žiarovku',
+                'switch1': 'Umiestňuješ: Jednopólový vypínač (č.1)',
+                'switch5': 'Umiestňuješ: Sériový / Lustrový vypínač (č.5)',
+                'switch6': 'Umiestňuješ: Striedavý / Schodiskový vypínač (č.6)',
+                'switch7': 'Umiestňuješ: Krížový vypínač (č.7)',
+                'cable': '🔌 REŽIM KÁBLOVANIA: Klikni na prvý prvok (napr. Istič) a potom na druhý (napr. Zásuvku).',
+                'eraser': '🧹 GUMA AKTÍVNA: Kliknutím na akýkoľvek prvok ho vymažeš aj s káblami.'
+            }[tool];
+            statusBar.textContent = toolText;
+        }
+
+        function getElementAtPosition(x, y) {
+            for (let i = elements.length - 1; i >= 0; i--) {
+                let el = elements[i];
+                let dx = el.x - x;
+                let dy = el.y - y;
+                if (Math.sqrt(dx * dx + dy * dy) < HIT_RADIUS) {
+                    return elements[i]; 
+                }
+            }
+            return null;
+        }
+
+        // Kliknutie na plátno
+        canvas.addEventListener('click', function(e) {
+            if (!currentTool) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const clickedEl = getElementAtPosition(x, y);
+
+            // 1. REŽIM GUMY
+            if (currentTool === 'eraser') {
+                if (clickedEl) {
+                    // Vymaž prislúchajúce káble
+                    connections = connections.filter(c => c.from !== clickedEl.id && c.to !== clickedEl.id);
+                    // Vymaž prvok
+                    elements = elements.filter(el => el.id !== clickedEl.id);
+                    drawScene();
+                }
+                return;
+            }
+
+            // 2. REŽIM KÁBLA (ZAPÁJANIE NA ISTIČ / PRVKY)
+            if (currentTool === 'cable') {
+                if (clickedEl) {
+                    if (!cableStartElement) {
+                        // Prvý klik
+                        cableStartElement = clickedEl;
+                        statusBar.textContent = `🔌 Kábel chytený! Teraz klikni na cieľový komponent.`;
+                        drawScene(); // Zvýrazníme štartovací bod
+                    } else {
+                        // Druhý klik - prepojenie
+                        if (cableStartElement.id !== clickedEl.id) {
+                            // Skontroluj, či už také prepojenie neexistuje
+                            const exists = connections.some(c => 
+                                (c.from === cableStartElement.id && c.to === clickedEl.id) ||
+                                (c.from === clickedEl.id && c.to === cableStartElement.id)
+                            );
+                            if (!exists) {
+                                connections.push({ from: cableStartElement.id, to: clickedEl.id });
+                            }
+                        }
+                        cableStartElement = null; // Reset pre ďalší kábel
+                        statusBar.textContent = `🔌 Kábel zapojený. Môžeš spájať ďalej.`;
+                        drawScene();
+                    }
+                }
+                return;
+            }
+
+            // 3. PRIDÁVANIE PRVKOV (Ak neklikol na existujúci prvok príliš blízko)
+            if (!clickedEl) {
+                elements.push({ 
+                    id: Date.now() + Math.random(),
+                    type: currentTool, 
+                    x: x, 
+                    y: y
+                });
+                drawScene();
+            }
+        });
+
+        // --- POMOCNÉ FUNKCIE PRE VYSOKO VIDITEĽNÝ PODKLAD (VRCHNÁ VRSTVA) ---
+        function drawHighVisibilityBase(x, y, accentColor) {
+            // Biely podkladový disk, ktorý prekryje akúkoľvek čiaru na pôdoryse
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            ctx.arc(x, y, 14, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Žiarivé vnútorné ohraničenie (Accent), aby ikona "svietila"
+            ctx.shadowBlur = 0; 
+            ctx.strokeStyle = accentColor;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        // --- VYKRESLENIE IKON PODĽA STN NORIEM ---
+        function drawBreaker(x, y) {
+            drawHighVisibilityBase(x, y, '#2ecc71'); // Zelený akcent
+            ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
+            ctx.strokeRect(x - 6, y - 7, 12, 14);
+            ctx.font = '9px Arial'; ctx.fillStyle = '#000'; ctx.fillText('FA', x - 6, y + 4);
+        }
+
+        function drawSocket(x, y) {
+            drawHighVisibilityBase(x, y, '#3498db'); // Modrý akcent
+            ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(x, y, 8, -Math.PI, 0); ctx.stroke(); // Oblúk zásuvky
+            ctx.beginPath(); ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y); ctx.stroke(); // Základňa
+            ctx.beginPath(); ctx.moveTo(x, y - 8); ctx.lineTo(x, y - 13); ctx.stroke(); // Vývod
+        }
+
+        function drawLight(x, y) {
+            drawHighVisibilityBase(x, y, '#f1c40f'); // Žltý akcent
+            ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(x, y, 7, 0, 2*Math.PI); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
+        }
+
+        function drawSwitchBase(x, y) {
+            // Spoločný základ pre vypínače (krúžok)
+            ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(x, y, 6, 0, 2*Math.PI); ctx.stroke();
+        }
+
+        function drawSwitch1(x, y) {
+            drawHighVisibilityBase(x, y, '#e74c3c'); // Červený akcent
+            drawSwitchBase(x, y);
+            // Jedna páčka doprava hore (Vypínač č.1)
+            ctx.beginPath(); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x + 10, y - 10); ctx.lineTo(x + 13, y - 7); ctx.stroke();
+        }
+
+        function drawSwitch5(x, y) {
+            drawHighVisibilityBase(x, y, '#e74c3c');
+            drawSwitchBase(x, y);
+            // Dve páčky (Sériový č.5)
+            ctx.beginPath(); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x + 10, y - 10); ctx.lineTo(x + 13, y - 7); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x + 2, y - 5); ctx.lineTo(x + 6, y - 12); ctx.lineTo(x + 3, y - 14); ctx.stroke();
+        }
+
+        function drawSwitch6(x, y) {
+            drawHighVisibilityBase(x, y, '#e74c3c');
+            drawSwitchBase(x, y);
+            // Páčka na obe strany (Striedavý č.6)
+            ctx.beginPath(); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x + 10, y - 10); ctx.lineTo(x + 13, y - 7); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x - 4, y + 4); ctx.lineTo(x - 10, y + 10); ctx.lineTo(x - 13, y + 7); ctx.stroke();
+        }
+
+        function drawSwitch7(x, y) {
+            drawHighVisibilityBase(x, y, '#e74c3c');
+            drawSwitchBase(x, y);
+            // Krížový č.7 (Zdvojené čieľka alebo prekríženie)
+            ctx.beginPath(); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x + 10, y - 10); ctx.lineTo(x + 13, y - 7); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x - 4, y + 4); ctx.lineTo(x - 10, y + 10); ctx.lineTo(x - 13, y + 7); ctx.stroke();
+            // Krížové rameno naviac
+            ctx.beginPath(); ctx.moveTo(x - 4, y - 4); ctx.lineTo(x - 9, y - 9); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x + 4, y + 4); ctx.lineTo(x + 9, y + 9); ctx.stroke();
+        }
+
+        // --- HLAVNÉ PREKRESLOVANIE SCÉNY (VRSTVENIE) ---
+        function drawScene() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. VRSTVA: Pôdorys (Spodok)
+            if (bgImage) {
+                ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+            } else {
+                // Ak nie je obrázok, dáme mriežku / neutrálne pozadie
+                ctx.fillStyle = "#2b2b2b";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // 2. VRSTVA: Káble (V strede, pod ikonami)
+            connections.forEach(conn => {
+                const fromEl = elements.find(el => el.id === conn.from);
+                const toEl = elements.find(el => el.id === conn.to);
+                
+                if (fromEl && toEl) {
+                    ctx.strokeStyle = '#ff00ff'; // Výrazná magenta/ružová pre trasu káblov
+                    ctx.lineWidth = 3;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(fromEl.x, fromEl.y);
+                    ctx.lineTo(toEl.x, toEl.y);
+                    ctx.stroke();
+                }
+            });
+
+            // Ak ťaháme kábel, zvýrazníme štartovací bod pulzujúcim kruhom
+            if (cableStartElement) {
+                ctx.strokeStyle = '#00bfff';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(cableStartElement.x, cableStartElement.y, 20, 0, 2*Math.PI);
+                ctx.stroke();
+            }
+
+            // 3. VRSTVA: Ikony a symboly (Úplne navrchu)
+            elements.forEach(el => {
+                switch(el.type) {
+                    case 'breaker': drawBreaker(el.x, el.y); break;
+                    case 'socket':  drawSocket(el.x, el.y); break;
+                    case 'light':   drawLight(el.x, el.y); break;
+                    case 'switch1': drawSwitch1(el.x, el.y); break;
+                    case 'switch5': drawSwitch5(el.x, el.y); break;
+                    case 'switch6': drawSwitch6(el.x, el.y); break;
+                    case 'switch7': drawSwitch7(el.x, el.y); break;
+                }
+            });
+        }
+    </script>
+</body>
+</html>
